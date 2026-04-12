@@ -1,22 +1,23 @@
-"""The pvpc_hourly_pricing integration - Patched with external JSON holidays.
+"""The pvpc_hourly_pricing integration - Patched with automatic P3 holiday calculation.
 
 Parche para corregir el KeyError en aiopvpc cuando el año actual no está
 en el diccionario hardcodeado _NATIONAL_EXTRA_HOLIDAYS_FOR_P3_PERIOD.
 
-En lugar de usar defaultdict(set) vacío (que pierde la info de festivos),
-esta versión carga los festivos desde un fichero JSON externo editable:
-  /config/pvpc_festivos_p3.json
+Esta versión calcula los festivos nacionales P3 automáticamente para
+cualquier año, sin depender de ficheros externos ni endpoints:
+  - 9 festivos con fecha fija (mismo día cada año)
+  - 1 festivo variable: Viernes Santo (calculado con algoritmo de Pascua)
 
-Si el fichero no existe o el año no está en él, se usa set() vacío como
-fallback (equivalente al parche defaultdict original).
+Opcionalmente, si existe /config/pvpc_festivos_p3.json, se usa como
+override manual (por ejemplo para añadir festivos autonómicos).
 
-Más info: https://github.com/home-assistant/core/issues/160084
+Más info: https://github.com/mainmind83/HA-PVPC-JSONfix
 """
 
 import json
 import logging
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from homeassistant.const import CONF_API_TOKEN, Platform
@@ -29,37 +30,79 @@ from .helpers import get_enabled_sensor_keys
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 _LOGGER = logging.getLogger(__name__)
 
-# Ruta del fichero JSON con los festivos nacionales P3
+# Ruta del fichero JSON opcional con festivos manuales (override)
 _HOLIDAYS_JSON = Path("/config/pvpc_festivos_p3.json")
 
 
-def _load_holidays_from_json() -> dict[int, set[date]]:
-    """Load national P3 holidays from external JSON file.
+def _easter_date(year: int) -> date:
+    """Calculate Easter Sunday date using the Anonymous Gregorian algorithm.
 
-    Returns a dict {year: set(date, ...)} compatible with
-    aiopvpc's _NATIONAL_EXTRA_HOLIDAYS_FOR_P3_PERIOD format.
+    Also known as the "Meeus/Jones/Butcher" algorithm.
+    Valid for any year in the Gregorian calendar.
+    Reference: https://en.wikipedia.org/wiki/Date_of_Easter#Anonymous_Gregorian_algorithm
     """
-    holidays: dict[int, set[date]] = {}
+    a = year % 19
+    b, c = divmod(year, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    l = (32 + 2 * e + 2 * i - h - k) % 7  # noqa: E741
+    m = (a + 11 * h + 22 * l) // 451
+    month, day = divmod(h + l - 7 * m + 114, 31)
+    return date(year, month, day + 1)
 
+
+def _good_friday(year: int) -> date:
+    """Calculate Good Friday (Viernes Santo) for a given year."""
+    return _easter_date(year) - timedelta(days=2)
+
+
+def _calculate_p3_holidays(year: int) -> set[date]:
+    """Calculate all national P3 holidays for a given year.
+
+    Spanish PVPC regulation defines P3 (valley) period for all hours on:
+    - Saturdays and Sundays (handled separately by aiopvpc)
+    - National holidays with fixed date (non-substitutable)
+    - January 6th (Epiphany, kept by all autonomous communities)
+    - Good Friday (variable date, calculated from Easter)
+
+    Source: BOE, CNMC regulation for tarifa 2.0TD
+    """
+    return {
+        date(year, 1, 1),     # Año Nuevo
+        date(year, 1, 6),     # Epifanía del Señor
+        _good_friday(year),   # Viernes Santo (variable)
+        date(year, 5, 1),     # Fiesta del Trabajo
+        date(year, 8, 15),    # Asunción de la Virgen
+        date(year, 10, 12),   # Fiesta Nacional de España
+        date(year, 11, 1),    # Todos los Santos
+        date(year, 12, 6),    # Día de la Constitución
+        date(year, 12, 8),    # Inmaculada Concepción
+        date(year, 12, 25),   # Natividad del Señor
+    }
+
+
+def _load_json_overrides() -> dict[int, set[date]]:
+    """Load optional manual holiday overrides from JSON file.
+
+    If the file exists, its holidays are merged with the calculated ones.
+    This allows users to add regional holidays or correct any discrepancy.
+    """
     if not _HOLIDAYS_JSON.is_file():
-        _LOGGER.warning(
-            "Fichero de festivos no encontrado: %s — "
-            "los festivos nacionales NO se aplicarán como P3. "
-            "Descarga el fichero desde el repositorio del parche.",
-            _HOLIDAYS_JSON,
-        )
-        return holidays
+        return {}
 
     try:
         raw = json.loads(_HOLIDAYS_JSON.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as err:
-        _LOGGER.error(
-            "Error leyendo %s: %s — usando festivos vacíos", _HOLIDAYS_JSON, err
+        _LOGGER.warning(
+            "Error leyendo %s: %s — se ignorará", _HOLIDAYS_JSON, err
         )
-        return holidays
+        return {}
 
+    overrides: dict[int, set[date]] = {}
     for year_str, dates_list in raw.items():
-        # Saltar claves que empiezan por _ (metadatos)
         if year_str.startswith("_"):
             continue
         try:
@@ -72,15 +115,56 @@ def _load_holidays_from_json() -> dict[int, set[date]]:
             try:
                 year_dates.add(date.fromisoformat(d))
             except (ValueError, TypeError):
-                _LOGGER.warning("Fecha inválida en %s: %s", year_str, d)
-        holidays[year] = year_dates
+                pass
+        overrides[year] = year_dates
 
-    _LOGGER.info(
-        "Festivos P3 cargados desde %s: años %s",
+    _LOGGER.debug(
+        "Festivos P3 override desde %s: años %s",
         _HOLIDAYS_JSON,
-        sorted(holidays.keys()),
+        sorted(overrides.keys()),
     )
-    return holidays
+    return overrides
+
+
+def _build_holidays_dict(
+    original: dict, overrides: dict[int, set[date]]
+) -> dict[int, set[date]]:
+    """Build the complete holidays dictionary.
+
+    Priority: JSON overrides > calculated > original hardcoded.
+    For any year not in overrides, holidays are calculated automatically.
+    """
+    result: dict[int, set[date]] = {}
+
+    # Start with original hardcoded data (years 2021-2025)
+    for year, dates in original.items():
+        result[year] = set(dates)
+
+    # Override/extend with JSON file data
+    for year, dates in overrides.items():
+        result[year] = dates
+
+    return result
+
+
+class _AutoHolidaysDict(dict):
+    """Dict subclass that auto-calculates holidays for missing years.
+
+    When aiopvpc accesses _NATIONAL_EXTRA_HOLIDAYS_FOR_P3_PERIOD[year]
+    and the year is not in the dict, this class calculates the holidays
+    on-the-fly instead of raising KeyError.
+    """
+
+    def __missing__(self, year: int) -> set[date]:
+        """Auto-calculate P3 holidays for any missing year."""
+        holidays = _calculate_p3_holidays(year)
+        self[year] = holidays  # Cache for future lookups
+        _LOGGER.info(
+            "Festivos P3 calculados automáticamente para %d: %s",
+            year,
+            sorted(d.isoformat() for d in holidays),
+        )
+        return holidays
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: PVPCConfigEntry) -> bool:
@@ -90,22 +174,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: PVPCConfigEntry) -> bool
     try:
         import aiopvpc.pvpc_tariff as pvpc_tariff
 
-        # Cargar festivos desde JSON externo
-        json_holidays = _load_holidays_from_json()
+        # Cargar overrides opcionales desde JSON
+        json_overrides = _load_json_overrides()
 
-        if json_holidays:
-            # Mezclar: JSON tiene prioridad, pero conservar años del original
-            # que no estén en el JSON (por si aiopvpc se actualiza algún día)
-            merged = dict(pvpc_tariff._NATIONAL_EXTRA_HOLIDAYS_FOR_P3_PERIOD)
-            merged.update(json_holidays)
-            pvpc_tariff._NATIONAL_EXTRA_HOLIDAYS_FOR_P3_PERIOD = defaultdict(
-                set, merged
-            )
-        else:
-            # Fallback: al menos evitar el KeyError con defaultdict vacío
-            pvpc_tariff._NATIONAL_EXTRA_HOLIDAYS_FOR_P3_PERIOD = defaultdict(
-                set, pvpc_tariff._NATIONAL_EXTRA_HOLIDAYS_FOR_P3_PERIOD
-            )
+        # Construir diccionario base con datos originales + overrides
+        base = _build_holidays_dict(
+            pvpc_tariff._NATIONAL_EXTRA_HOLIDAYS_FOR_P3_PERIOD,
+            json_overrides,
+        )
+
+        # Reemplazar con AutoHolidaysDict que calcula años faltantes
+        auto_dict = _AutoHolidaysDict(base)
+        pvpc_tariff._NATIONAL_EXTRA_HOLIDAYS_FOR_P3_PERIOD = auto_dict
+
+        _LOGGER.info(
+            "PVPC festivos P3: años precargados %s, "
+            "años futuros se calcularán automáticamente "
+            "(JSON override: %s)",
+            sorted(auto_dict.keys()),
+            "activo" if json_overrides else "no encontrado",
+        )
 
     except (ImportError, AttributeError, TypeError) as err:
         _LOGGER.warning("No se pudo parchear aiopvpc: %s", err)
