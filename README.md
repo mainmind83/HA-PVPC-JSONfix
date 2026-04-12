@@ -4,29 +4,60 @@
 [![HA version](https://img.shields.io/badge/HA-2024.6%2B-blue)](https://www.home-assistant.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Parche para la integración oficial `pvpc_hourly_pricing` de Home Assistant, que dejó de funcionar el 1 de enero de 2026 por un bug en la librería `aiopvpc`.
+🇪🇸 [Versión en español](README_ES.md)
 
-## ¿Qué problema resuelve?
+Patch for the official `pvpc_hourly_pricing` Home Assistant integration, which stopped working on January 1st 2026 due to a bug in the `aiopvpc` library.
 
-La librería `aiopvpc` tiene los festivos nacionales de España **hardcodeados** en un diccionario Python que solo llega hasta 2025. Al entrar en 2026, lanza un `KeyError: 2026` y la integración deja de funcionar completamente.
+## What problem does it solve?
 
-### ¿Por qué este parche y no otro?
+The `aiopvpc` library has Spain's national holidays **hardcoded** in a Python dictionary that only covers up to 2025. On January 1st 2026, the code throws `KeyError: 2026` and the integration stops working entirely.
 
-| Solución | Evita crash | Festivos correctos | Actualizable sin código |
+### Why this patch and not others?
+
+| Solution | Prevents crash | Correct holidays | Updatable without code |
 |----------|:-----------:|:------------------:|:----------------------:|
-| `defaultdict(set)` (HA-PVPC-Updated) | ✅ | ❌ festivos vacíos para 2026+ | ❌ |
-| ha-pvpc-next | ✅ | ✅ | ✅ pero es integración nueva |
-| **Este parche (JSON externo)** | ✅ | ✅ | ✅ editar un fichero JSON |
+| `defaultdict(set)` (HA-PVPC-Updated) | ✅ | ❌ empty for 2026+ | ❌ |
+| ha-pvpc-next | ✅ | ✅ | ✅ (full new integration) |
+| **HA-PVPC-JSONfix** | ✅ | ✅ | ✅ (edit a JSON file) |
 
-El parche `defaultdict(set)` evita el crash, pero al devolver un set vacío para 2026+, **días como el 1 de mayo o el 12 de octubre no se marcan como P3 (valle)**. Esos días se facturan incorrectamente a tarifa P1/P2.
+The `defaultdict(set)` patch prevents the crash, but returns empty holidays for 2026+, meaning **days like May 1st or October 12th are not billed as P3 (valley)** as they should be.
 
-Este parche carga los festivos desde un fichero JSON editable (`/config/pvpc_festivos_p3.json`), con los datos correctos de 2021 a 2027 incluidos.
+This patch loads holidays from an editable JSON file (`/config/pvpc_festivos_p3.json`), with correct data from 2021 to 2027 included.
 
-## Instalación
+---
 
-### Paso 1 — Copiar la integración oficial
+## Installation
 
-Necesitas copiar los ficheros de la integración del core al directorio `custom_components`. Accede por SSH y ejecuta:
+### Step 1 — Copy the official integration files
+
+You need to copy the official integration into `custom_components` first. Choose the method that matches your setup:
+
+#### Method A — HA-OS / File Editor (no SSH needed)
+
+1. Using **File Editor** or **Samba**, create the folder:
+   ```
+   /config/custom_components/pvpc_hourly_pricing/
+   ```
+
+2. Download **all files** from the official integration:
+   https://github.com/home-assistant/core/tree/dev/homeassistant/components/pvpc_hourly_pricing
+
+   You need these files:
+   - `__init__.py`
+   - `config_flow.py`
+   - `const.py`
+   - `coordinator.py`
+   - `helpers.py`
+   - `manifest.json`
+   - `sensor.py`
+   - `strings.json`
+   - `translations/` folder (with all files inside)
+
+3. Copy all downloaded files into `/config/custom_components/pvpc_hourly_pricing/`
+
+#### Method B — SSH / Docker
+
+If you have SSH access (e.g. via Advanced SSH & Web Terminal add-on with Protection Mode disabled):
 
 ```bash
 mkdir -p /config/custom_components
@@ -34,88 +65,90 @@ docker cp homeassistant:/usr/src/homeassistant/homeassistant/components/pvpc_hou
   /config/custom_components/
 ```
 
-### Paso 2 — Instalar este parche vía HACS
+### Step 2 — Install the patch
 
-1. En Home Assistant, abre **HACS → Integraciones**
-2. Menú ⋮ → **Repositorios personalizados**
-3. Añade la URL de este repositorio como **Integración**
-4. Busca **PVPC Hourly Pricing — JSON Holidays Fix** e instala
-5. Esto sobreescribirá el `__init__.py` y `manifest.json` con las versiones parcheadas
+#### Via HACS (recommended)
 
-### Paso 3 — Copiar el fichero de festivos
+1. In Home Assistant, open **HACS → Integrations**
+2. Menu ⋮ → **Custom repositories**
+3. Add URL: `https://github.com/mainmind83/HA-PVPC-JSONfix` — Category: **Integration**
+4. Search for **PVPC Hourly Pricing — JSON Holidays Fix** and install
+5. This overwrites `__init__.py` and `manifest.json` with the patched versions
 
-Copia `pvpc_festivos_p3.json` a la raíz de tu configuración:
+#### Manual
 
+Download `__init__.py` and `manifest.json` from this repo and copy them into `/config/custom_components/pvpc_hourly_pricing/`, overwriting the originals.
+
+### Step 3 — Copy the holidays file
+
+Copy `pvpc_festivos_p3.json` to the root of your config:
+
+#### Via File Editor:
+The file is at `/config/custom_components/pvpc_hourly_pricing/pvpc_festivos_p3.json` — copy it to `/config/pvpc_festivos_p3.json`
+
+#### Via SSH:
 ```bash
 cp /config/custom_components/pvpc_hourly_pricing/pvpc_festivos_p3.json /config/
 ```
 
-### Paso 4 — Reiniciar
+### Step 4 — Restart Home Assistant
 
+Settings → System → Restart, or:
 ```bash
 ha core restart
 ```
 
-### Verificación
+### Step 5 — Verify
 
-En los logs de HA debería aparecer:
+Check the logs at **Settings → System → Logs**. You should see:
 
 ```
 INFO [...] Festivos P3 cargados desde /config/pvpc_festivos_p3.json: años [2021, 2022, 2023, 2024, 2025, 2026, 2027]
 ```
 
-## Actualización anual
+---
 
-Cada año, cuando el BOE publique el calendario laboral (normalmente en octubre), edita `/config/pvpc_festivos_p3.json` y añade el nuevo año:
+## Yearly update
 
-```json
-"2028": [
-    "2028-01-01",
-    "2028-01-06",
-    "2028-04-14",
-    "2028-05-01",
-    "2028-08-15",
-    "2028-10-12",
-    "2028-11-01",
-    "2028-12-06",
-    "2028-12-08",
-    "2028-12-25"
-]
-```
+Just edit `/config/pvpc_festivos_p3.json` and add the new year. Out of the 10 national P3 holidays, **9 have fixed dates every year** — only Good Friday changes:
 
-**Solo cambia la fecha de Viernes Santo cada año.** Los otros 9 festivos son siempre los mismos:
+| Holiday | Date | Note |
+|---------|------|------|
+| New Year | January 1 | Fixed |
+| Epiphany | January 6 | Fixed |
+| Good Friday | Variable | Changes each year |
+| Labour Day | May 1 | Fixed |
+| Assumption | August 15 | Fixed |
+| National Day | October 12 | Fixed |
+| All Saints | November 1 | Fixed |
+| Constitution | December 6 | Fixed |
+| Immaculate | December 8 | Fixed |
+| Christmas | December 25 | Fixed |
 
-| Festivo | Fecha |
-|---------|-------|
-| Año Nuevo | 1 enero |
-| Epifanía | 6 enero |
-| Viernes Santo | *variable* |
-| Día del Trabajo | 1 mayo |
-| Asunción | 15 agosto |
-| Fiesta Nacional | 12 octubre |
-| Todos los Santos | 1 noviembre |
-| Constitución | 6 diciembre |
-| Inmaculada | 8 diciembre |
-| Navidad | 25 diciembre |
+When the BOE (Spanish Official Gazette) publishes the labour calendar (usually in October), just add one entry with the new Good Friday date.
 
-## Desinstalación
+---
 
-Cuando HA Core integre un fix oficial:
+## Uninstall
+
+When HA Core integrates a permanent fix:
 
 ```bash
 rm -r /config/custom_components/pvpc_hourly_pricing
 rm /config/pvpc_festivos_p3.json
 ```
 
-Reinicia HA y la integración oficial volverá a tomar el control.
+Restart HA and the official integration will take over again.
 
-## Contexto
+---
 
-- [Issue #160084](https://github.com/home-assistant/core/issues/160084) — Primer reporte del bug
-- [Issue #161231](https://github.com/home-assistant/core/issues/161231) — Confirmación
-- [Issue #162550](https://github.com/home-assistant/core/issues/162550) — Petición de actualización
-- [BOE — Festivos 2026](https://www.boe.es/diario_boe/txt.php?id=BOE-A-2025-21667)
+## Context
 
-## Licencia
+- [Issue #160084](https://github.com/home-assistant/core/issues/160084) — Original bug report
+- [Issue #161231](https://github.com/home-assistant/core/issues/161231) — Confirmation
+- [Issue #162550](https://github.com/home-assistant/core/issues/162550) — Update request
+- [BOE — 2026 holidays](https://www.boe.es/diario_boe/txt.php?id=BOE-A-2025-21667)
 
-MIT — Misma licencia que la integración original y que `aiopvpc`.
+## License
+
+MIT — Same license as the original integration and `aiopvpc`.
