@@ -19,20 +19,26 @@ The `aiopvpc` library has Spain's national holidays **hardcoded** in a Python di
 | `defaultdict(set)` (HA-PVPC-Updated) | ✅ | ❌ empty for 2026+ | ✅ but wrong data |
 | Bump to aiopvpc 4.3.1 (PR #167189) | ❌ still covers up to 2025 only | ❌ | ❌ |
 | ha-pvpc-next | ✅ | ✅ | ✅ (full new integration) |
-| **HA-PVPC-JSONfix v0.2.0** | ✅ | ✅ | ✅ automatic calculation |
+| **HA-PVPC-JSONfix v0.3.0** | ✅ | ✅ | ✅ automatic calculation |
 
-Since v0.2.0, this patch **calculates P3 holidays automatically** for any year using the Gregorian Easter algorithm. No JSON file needed, no external downloads, no annual updates. It just works.
+Since v0.2.0, this patch **calculates P3 holidays automatically** for any year. Since v0.3.0, the calculation is **aligned with CNMC regulation and verified against real billing data** from Spanish distributors.
 
 ---
 
 ## How it works
 
-The patch replaces `aiopvpc`'s hardcoded holiday dictionary with an `_AutoHolidaysDict` — a Python `dict` subclass that, instead of raising `KeyError` for a missing year, calculates the 10 national P3 holidays on-the-fly:
+The patch replaces `aiopvpc`'s hardcoded holiday dictionary with an `_AutoHolidaysDict` — a Python `dict` subclass that, instead of raising `KeyError` for a missing year, calculates P3 holidays on-the-fly:
 
-- **9 fixed-date holidays** (same every year)
-- **1 variable holiday**: Good Friday, calculated from Easter using the [Anonymous Gregorian algorithm](https://en.wikipedia.org/wiki/Date_of_Easter#Anonymous_Gregorian_algorithm)
+- **9 fixed-date national holidays** checked against weekday (holidays falling on weekends are excluded — they're already P3 as Saturday/Sunday)
+- **Good Friday excluded** — it has no fixed date and is not P3 per CNMC regulation (confirmed by real billing data from e-distribución)
+- **Next-year lookahead** — January 1st and 6th of the following year are included to cover the year transition
 
-Optionally, if `/config/pvpc_festivos_p3.json` exists, its contents are used as a manual override (e.g., to add extra holidays for testing or comparison).
+Optionally, if `/config/pvpc_festivos_p3.json` exists, its contents are used as a manual override (e.g., to add Good Friday if your distributor treats it as P3, or for testing).
+
+Holiday resolution follows a three-layer priority:
+1. **JSON override** (`/config/pvpc_festivos_p3.json`) — highest priority, for manual corrections
+2. **Original aiopvpc data** — the hardcoded dict (2021–2025) preserved for backward compatibility
+3. **Automatic calculation** — fallback for any year not covered above, works forever
 
 ---
 
@@ -96,7 +102,7 @@ Settings → System → Restart, or:
 ha core restart
 ```
 
-> **Note:** Since v0.2.0, copying `pvpc_festivos_p3.json` is **no longer required**. Holidays are calculated automatically. The JSON file is only needed if you want to manually override specific dates.
+> **Note:** Copying `pvpc_festivos_p3.json` is **not required**. Holidays are calculated automatically. The JSON file is only needed if you want to manually override specific dates (e.g., add Good Friday for your distributor).
 
 ### Step 4 — Verify
 
@@ -109,7 +115,7 @@ INFO [...] PVPC festivos P3: años precargados [2021, 2022, 2023, 2024, 2025], a
 When the integration queries 2026 for the first time:
 
 ```
-INFO [...] Festivos P3 calculados automáticamente para 2026: ['2026-01-01', '2026-01-06', '2026-04-03', '2026-05-01', '2026-08-15', '2026-10-12', '2026-11-01', '2026-12-06', '2026-12-08', '2026-12-25']
+INFO [...] Festivos P3 calculados automáticamente para 2026: ['2026-01-01', '2026-01-06', '2026-05-01', '2026-10-12', '2026-12-08', '2026-12-25', '2027-01-01', '2027-01-06']
 ```
 
 ---
@@ -122,7 +128,7 @@ The P3 (valley) period definition comes from **CNMC Circular 3/2020** ([BOE-A-20
 
 This means:
 
-### ✅ Always P3 (24h valley) — National non-substitutable holidays with fixed date
+### ✅ P3 (24h valley) — National non-substitutable holidays with fixed date
 
 | Holiday | Date | Legal basis |
 |---------|------|-------------|
@@ -136,16 +142,15 @@ This means:
 | Immaculate Conception | December 8 | Non-substitutable, fixed |
 | Christmas | December 25 | Non-substitutable, fixed |
 
-### ⚠️ Good Friday — Special case
+> **Note:** When a fixed-date holiday falls on a weekend (Saturday or Sunday), it is already P3 by default and does not need to be listed separately. For example, in 2026: August 15 (SAT), November 1 (SUN), and December 6 (SUN) are excluded from the calculated list because they are already P3 as weekend days.
 
-Good Friday is a **national non-substitutable holiday**, but it **does not have a fixed date** (it depends on Easter). According to the strict reading of the CNMC Circular, it should be excluded from P3.
+### ❌ Good Friday — Excluded from P3
 
-However, in practice:
-- The original `aiopvpc` library includes it as P3
-- Most electricity distributors bill it as P3 (valley)
-- All community workarounds (HA-PVPC-Updated, ha-pvpc-next) include it
+Good Friday is a **national non-substitutable holiday**, but it **does not have a fixed date** (it depends on Easter). The CNMC Circular explicitly excludes holidays without a fixed date from P3.
 
-**This patch includes Good Friday as P3**, matching the established industry practice and the original `aiopvpc` behavior. If the regulation is ever enforced strictly, users can override this via the optional JSON file.
+This is confirmed by real billing data: e-distribución bills Good Friday with P1/P2 periods during daytime, not as P3 all day (verified with load curves from 03-04-2026).
+
+If your distributor does treat Good Friday as P3, you can add it via the JSON override file (see below).
 
 ### ❌ Never P3
 
@@ -154,6 +159,37 @@ However, in practice:
 - **Substitutable national holidays** that a CCAA has replaced with a regional one
 
 The PVPC tariff is applied **nationally**, not regionally. Your distributor does not adjust P3 periods based on your autonomous community's calendar.
+
+---
+
+## Optional: JSON override file
+
+If you need to override the automatically calculated holidays, create `/config/pvpc_festivos_p3.json`.
+
+**Example: adding Good Friday** for distributors that treat it as P3:
+
+```json
+{
+  "2026": [
+    "2026-01-01", "2026-01-06", "2026-04-03", "2026-05-01",
+    "2026-10-12", "2026-12-08", "2026-12-25"
+  ]
+}
+```
+
+**Example: using only the 9 fixed-date holidays** (no weekend exclusion, no lookahead — simpler approach):
+
+```json
+{
+  "2026": [
+    "2026-01-01", "2026-01-06", "2026-05-01", "2026-08-15",
+    "2026-10-12", "2026-11-01", "2026-12-06", "2026-12-08",
+    "2026-12-25"
+  ]
+}
+```
+
+When the JSON file exists, its dates take priority over the automatic calculation for the years it covers. Years not in the JSON are still calculated automatically.
 
 ---
 
@@ -178,35 +214,7 @@ The script will:
 - Add any fixed P3 holidays missing from the CSV (e.g., All Saints or Constitution Day, which may not appear as "Nacional" when they fall on Sunday and are moved by the CCAA)
 - Update or create `/config/pvpc_festivos_p3.json`
 
-### CSV format (seg-social.es)
-
-```csv
-PROVINCIA,LOCALIDAD,FECHA,TIPO,DESCRIPCION
-,,01-01-2026,Nacional,"Año Nuevo"
-,,06-01-2026,Nacional,"Epifania del Señor"
-,,03-04-2026,Nacional,"Viernes Santo"
-...
-```
-
 > **Note:** The seg-social.es endpoint (`CalendarioServlet?exportacion=CSV&tipo=0`) requires a browser session (JSESSIONID cookie). Direct `curl` calls without cookies return empty responses (HTTP 200, Content-Length: 0). The CSV must be downloaded manually through the web interface.
-
----
-
-## Optional: JSON override file
-
-If you need to override the automatically calculated holidays (e.g., for testing or to add specific dates), create `/config/pvpc_festivos_p3.json`:
-
-```json
-{
-  "2026": [
-    "2026-01-01", "2026-01-06", "2026-04-03", "2026-05-01",
-    "2026-08-15", "2026-10-12", "2026-11-01", "2026-12-06",
-    "2026-12-08", "2026-12-25"
-  ]
-}
-```
-
-When the JSON file exists, its dates take priority over the automatic calculation for the years it covers. Years not in the JSON are still calculated automatically.
 
 ---
 
@@ -233,6 +241,12 @@ Restart HA and the official integration will take over again.
 - [PR #167189](https://github.com/home-assistant/core/pull/167189) — Bump to aiopvpc 4.3.1 (does not fix the issue — v4.3.1 still only covers up to 2025)
 
 ## Changelog
+
+### v0.3.0
+- **Good Friday excluded** from automatic calculation per CNMC Circular 3/2020 (no fixed date). Confirmed by real billing data from e-distribución (credit: @tmallafre). Can be added back via JSON override.
+- **Weekend holidays excluded** — holidays falling on Saturday/Sunday are already P3 as weekend days
+- **Next-year lookahead** — January 1st and 6th of year+1 included for year transition
+- Calculation verified to produce identical results to `spanish-pvpc-holidays` by @privatecoder
 
 ### v0.2.0
 - **Automatic holiday calculation** — no JSON file or external data needed

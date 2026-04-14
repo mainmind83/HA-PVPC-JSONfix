@@ -19,20 +19,26 @@ La librería `aiopvpc` tiene los festivos nacionales de España **hardcodeados**
 | `defaultdict(set)` (HA-PVPC-Updated) | ✅ | ❌ vacíos para 2026+ | ✅ pero datos erróneos |
 | Bump a aiopvpc 4.3.1 (PR #167189) | ❌ sigue cubriendo solo hasta 2025 | ❌ | ❌ |
 | ha-pvpc-next | ✅ | ✅ | ✅ (integración nueva completa) |
-| **HA-PVPC-JSONfix v0.2.0** | ✅ | ✅ | ✅ cálculo automático |
+| **HA-PVPC-JSONfix v0.3.0** | ✅ | ✅ | ✅ cálculo automático |
 
-Desde la v0.2.0, este parche **calcula los festivos P3 automáticamente** para cualquier año usando el algoritmo de Pascua gregoriano. Sin fichero JSON, sin descargas externas, sin actualizaciones anuales. Simplemente funciona.
+Desde la v0.2.0, este parche **calcula los festivos P3 automáticamente** para cualquier año. Desde la v0.3.0, el cálculo está **alineado con la regulación de la CNMC y verificado con datos reales de facturación** de distribuidoras españolas.
 
 ---
 
 ## Cómo funciona
 
-El parche reemplaza el diccionario hardcodeado de `aiopvpc` con un `_AutoHolidaysDict` — una subclase de `dict` en Python que, en lugar de lanzar `KeyError` para un año que falta, calcula los 10 festivos nacionales P3 al vuelo:
+El parche reemplaza el diccionario hardcodeado de `aiopvpc` con un `_AutoHolidaysDict` — una subclase de `dict` en Python que, en lugar de lanzar `KeyError` para un año que falta, calcula los festivos P3 al vuelo:
 
-- **9 festivos con fecha fija** (iguales cada año)
-- **1 festivo variable**: Viernes Santo, calculado a partir de la Pascua usando el [algoritmo gregoriano anónimo](https://en.wikipedia.org/wiki/Date_of_Easter#Anonymous_Gregorian_algorithm)
+- **9 festivos nacionales con fecha fija**, comprobados contra día de la semana (los que caen en fin de semana se excluyen — ya son P3 como sábado/domingo)
+- **Viernes Santo excluido** — no tiene fecha fija y no es P3 según la regulación de la CNMC (confirmado con datos reales de facturación de e-distribución)
+- **Lookahead del año siguiente** — se incluyen el 1 y 6 de enero del año siguiente para cubrir la transición de año
 
-Opcionalmente, si existe `/config/pvpc_festivos_p3.json`, su contenido se usa como override manual (por ejemplo, para añadir festivos extra para pruebas o comparación).
+Opcionalmente, si existe `/config/pvpc_festivos_p3.json`, su contenido se usa como override manual (por ejemplo, para añadir Viernes Santo si tu distribuidora lo trata como P3, o para pruebas).
+
+La resolución de festivos sigue un orden de prioridad de tres capas:
+1. **JSON override** (`/config/pvpc_festivos_p3.json`) — máxima prioridad, para correcciones manuales
+2. **Datos originales de aiopvpc** — el diccionario hardcodeado (2021–2025) se preserva por compatibilidad
+3. **Cálculo automático** — fallback para cualquier año no cubierto, funciona para siempre
 
 ---
 
@@ -96,7 +102,7 @@ Ajustes → Sistema → Reiniciar, o:
 ha core restart
 ```
 
-> **Nota:** Desde la v0.2.0, copiar `pvpc_festivos_p3.json` **ya no es necesario**. Los festivos se calculan automáticamente. El fichero JSON solo se necesita si quieres sobreescribir fechas manualmente.
+> **Nota:** Copiar `pvpc_festivos_p3.json` **no es necesario**. Los festivos se calculan automáticamente. El fichero JSON solo se necesita si quieres sobreescribir fechas manualmente (por ejemplo, añadir Viernes Santo para tu distribuidora).
 
 ### Paso 4 — Verificar
 
@@ -109,7 +115,7 @@ INFO [...] PVPC festivos P3: años precargados [2021, 2022, 2023, 2024, 2025], a
 Cuando la integración consulte 2026 por primera vez:
 
 ```
-INFO [...] Festivos P3 calculados automáticamente para 2026: ['2026-01-01', '2026-01-06', '2026-04-03', '2026-05-01', '2026-08-15', '2026-10-12', '2026-11-01', '2026-12-06', '2026-12-08', '2026-12-25']
+INFO [...] Festivos P3 calculados automáticamente para 2026: ['2026-01-01', '2026-01-06', '2026-05-01', '2026-10-12', '2026-12-08', '2026-12-25', '2027-01-01', '2027-01-06']
 ```
 
 ---
@@ -122,7 +128,7 @@ La definición del periodo P3 (valle) viene de la **Circular 3/2020 de la CNMC**
 
 Esto significa:
 
-### ✅ Siempre P3 (24h valle) — Festivos nacionales no sustituibles con fecha fija
+### ✅ P3 (24h valle) — Festivos nacionales no sustituibles con fecha fija
 
 | Festivo | Fecha | Base legal |
 |---------|-------|------------|
@@ -136,16 +142,15 @@ Esto significa:
 | Inmaculada | 8 de diciembre | No sustituible, fecha fija |
 | Navidad | 25 de diciembre | No sustituible, fecha fija |
 
-### ⚠️ Viernes Santo — Caso especial
+> **Nota:** Cuando un festivo de fecha fija cae en fin de semana (sábado o domingo), ya es P3 por defecto y no necesita estar listado aparte. Por ejemplo, en 2026: 15 de agosto (SÁB), 1 de noviembre (DOM) y 6 de diciembre (DOM) se excluyen de la lista calculada porque ya son P3 como días de fin de semana.
 
-El Viernes Santo es un **festivo nacional no sustituible**, pero **no tiene fecha fija** (depende de la Pascua). Según la lectura estricta de la Circular de la CNMC, debería quedar excluido del P3.
+### ❌ Viernes Santo — Excluido del P3
 
-Sin embargo, en la práctica:
-- La librería original `aiopvpc` lo incluye como P3
-- La mayoría de distribuidoras eléctricas lo facturan como P3 (valle)
-- Todos los parches de la comunidad (HA-PVPC-Updated, ha-pvpc-next) lo incluyen
+El Viernes Santo es un **festivo nacional no sustituible**, pero **no tiene fecha fija** (depende de la Pascua). La Circular de la CNMC excluye explícitamente los festivos sin fecha fija del P3.
 
-**Este parche incluye el Viernes Santo como P3**, siguiendo la práctica habitual del sector y el comportamiento original de `aiopvpc`. Si algún día la regulación se aplica estrictamente, los usuarios pueden sobreescribirlo mediante el fichero JSON opcional.
+Esto está confirmado con datos reales de facturación: e-distribución factura el Viernes Santo con periodos P1/P2 durante el día, no como P3 todo el día (verificado con curvas de carga del 03-04-2026).
+
+Si tu distribuidora sí trata el Viernes Santo como P3, puedes añadirlo mediante el fichero JSON de override (ver más abajo).
 
 ### ❌ Nunca P3
 
@@ -154,6 +159,37 @@ Sin embargo, en la práctica:
 - **Festivos nacionales sustituibles** que una CCAA haya reemplazado por otro
 
 La tarifa PVPC se aplica a **nivel nacional**, no autonómico. Tu distribuidora no ajusta los periodos P3 según el calendario de tu comunidad autónoma.
+
+---
+
+## Opcional: fichero JSON de override
+
+Si necesitas sobreescribir los festivos calculados automáticamente, crea `/config/pvpc_festivos_p3.json`.
+
+**Ejemplo: añadir Viernes Santo** para distribuidoras que lo tratan como P3:
+
+```json
+{
+  "2026": [
+    "2026-01-01", "2026-01-06", "2026-04-03", "2026-05-01",
+    "2026-10-12", "2026-12-08", "2026-12-25"
+  ]
+}
+```
+
+**Ejemplo: usar los 9 festivos de fecha fija** (sin exclusión de fin de semana ni lookahead — enfoque más simple):
+
+```json
+{
+  "2026": [
+    "2026-01-01", "2026-01-06", "2026-05-01", "2026-08-15",
+    "2026-10-12", "2026-11-01", "2026-12-06", "2026-12-08",
+    "2026-12-25"
+  ]
+}
+```
+
+Cuando el fichero JSON existe, sus fechas tienen prioridad sobre el cálculo automático para los años que contiene. Los años que no están en el JSON se siguen calculando automáticamente.
 
 ---
 
@@ -178,35 +214,7 @@ El script:
 - Añade festivos fijos P3 que puedan faltar en el CSV (por ejemplo, Todos los Santos o Constitución, que pueden no aparecer como "Nacional" cuando caen en domingo y la CCAA los traslada)
 - Actualiza o crea `/config/pvpc_festivos_p3.json`
 
-### Formato del CSV (seg-social.es)
-
-```csv
-PROVINCIA,LOCALIDAD,FECHA,TIPO,DESCRIPCION
-,,01-01-2026,Nacional,"Año Nuevo"
-,,06-01-2026,Nacional,"Epifania del Señor"
-,,03-04-2026,Nacional,"Viernes Santo"
-...
-```
-
 > **Nota:** El endpoint de seg-social.es (`CalendarioServlet?exportacion=CSV&tipo=0`) requiere sesión de navegador (cookie JSESSIONID). Las llamadas directas con `curl` sin cookies devuelven respuestas vacías (HTTP 200, Content-Length: 0). El CSV debe descargarse manualmente desde la web.
-
----
-
-## Opcional: fichero JSON de override
-
-Si necesitas sobreescribir los festivos calculados automáticamente (por ejemplo, para pruebas o para añadir fechas específicas), crea `/config/pvpc_festivos_p3.json`:
-
-```json
-{
-  "2026": [
-    "2026-01-01", "2026-01-06", "2026-04-03", "2026-05-01",
-    "2026-08-15", "2026-10-12", "2026-11-01", "2026-12-06",
-    "2026-12-08", "2026-12-25"
-  ]
-}
-```
-
-Cuando el fichero JSON existe, sus fechas tienen prioridad sobre el cálculo automático para los años que contiene. Los años que no están en el JSON se siguen calculando automáticamente.
 
 ---
 
@@ -233,6 +241,12 @@ Reinicia HA y la integración oficial volverá a funcionar.
 - [PR #167189](https://github.com/home-assistant/core/pull/167189) — Bump a aiopvpc 4.3.1 (no soluciona el problema — la v4.3.1 sigue cubriendo solo hasta 2025)
 
 ## Changelog
+
+### v0.3.0
+- **Viernes Santo excluido** del cálculo automático según Circular 3/2020 de la CNMC (no tiene fecha fija). Confirmado con datos reales de facturación de e-distribución (crédito: @tmallafre). Se puede añadir de nuevo mediante JSON override.
+- **Festivos en fin de semana excluidos** — los festivos que caen en sábado/domingo ya son P3 como días de fin de semana
+- **Lookahead del año siguiente** — se incluyen 1 y 6 de enero de year+1 para la transición de año
+- Cálculo verificado con resultados idénticos a `spanish-pvpc-holidays` de @privatecoder
 
 ### v0.2.0
 - **Cálculo automático de festivos** — sin fichero JSON ni datos externos
