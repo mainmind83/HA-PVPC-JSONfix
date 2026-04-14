@@ -6,10 +6,16 @@ en el diccionario hardcodeado _NATIONAL_EXTRA_HOLIDAYS_FOR_P3_PERIOD.
 Esta versión calcula los festivos nacionales P3 automáticamente para
 cualquier año, sin depender de ficheros externos ni endpoints:
   - 9 festivos con fecha fija (mismo día cada año)
-  - 1 festivo variable: Viernes Santo (calculado con algoritmo de Pascua)
+  - Excluye Viernes Santo (no tiene fecha fija, excluido por CNMC Circular
+    3/2020 y confirmado por datos reales de distribuidoras como e-distribución)
+  - Excluye festivos que caen en fin de semana (ya son P3 por ser sáb/dom)
+  - Añade festivos del 1 y 6 de enero del año siguiente (lookahead)
 
 Opcionalmente, si existe /config/pvpc_festivos_p3.json, se usa como
-override manual (por ejemplo para añadir festivos autonómicos).
+override manual (por ejemplo para añadir Viernes Santo u otros festivos).
+
+Basado en aportaciones de @privatecoder (spanish-pvpc-holidays) y datos
+reales de facturación de @tmallafre (e-distribución).
 
 Más info: https://github.com/mainmind83/HA-PVPC-JSONfix
 """
@@ -62,18 +68,25 @@ def _good_friday(year: int) -> date:
 def _calculate_p3_holidays(year: int) -> set[date]:
     """Calculate all national P3 holidays for a given year.
 
-    Spanish PVPC regulation defines P3 (valley) period for all hours on:
+    Per CNMC Circular 3/2020 (BOE-A-2020-1066), P3 (valley) applies to:
     - Saturdays and Sundays (handled separately by aiopvpc)
-    - National holidays with fixed date (non-substitutable)
+    - National holidays with fixed date, non-substitutable
     - January 6th (Epiphany, kept by all autonomous communities)
-    - Good Friday (variable date, calculated from Easter)
 
-    Source: BOE, CNMC regulation for tarifa 2.0TD
+    Excluded per regulation:
+    - Good Friday: non-substitutable but NO fixed date → not P3
+      (confirmed by real billing data from e-distribución)
+    - Holidays falling on weekends: already P3 as sat/sun
+    - Substitutable holidays replaced by CCAA
+    - Regional and local holidays
+
+    Next-year lookahead: Jan 1 and Jan 6 of year+1 are included
+    to cover the transition period (credit: @privatecoder).
     """
-    return {
+    # All 9 fixed-date national P3 holidays
+    candidates = {
         date(year, 1, 1),     # Año Nuevo
         date(year, 1, 6),     # Epifanía del Señor
-        _good_friday(year),   # Viernes Santo (variable)
         date(year, 5, 1),     # Fiesta del Trabajo
         date(year, 8, 15),    # Asunción de la Virgen
         date(year, 10, 12),   # Fiesta Nacional de España
@@ -82,6 +95,24 @@ def _calculate_p3_holidays(year: int) -> set[date]:
         date(year, 12, 8),    # Inmaculada Concepción
         date(year, 12, 25),   # Natividad del Señor
     }
+
+    # NOTE: Good Friday intentionally NOT included.
+    # CNMC Circular 3/2020 excludes holidays without fixed date.
+    # Confirmed by e-distribución billing data (P1/P2 on Good Friday).
+    # Users can add it via JSON override if their distributor treats it as P3.
+
+    # Exclude holidays falling on weekends (already P3 as sat/sun)
+    holidays = {d for d in candidates if d.weekday() < 5}  # 0=Mon..4=Fri
+
+    # Next-year lookahead: add Jan 1 and Jan 6 of following year
+    next_jan_1 = date(year + 1, 1, 1)
+    next_jan_6 = date(year + 1, 1, 6)
+    if next_jan_1.weekday() < 5:
+        holidays.add(next_jan_1)
+    if next_jan_6.weekday() < 5:
+        holidays.add(next_jan_6)
+
+    return holidays
 
 
 def _load_json_overrides() -> dict[int, set[date]]:
